@@ -1,0 +1,405 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  POETRY_VERSION: "1.7.1"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached virtual environment
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --no-root
+
+      - name: Install project
+        run: poetry install --no-interaction
+
+      - name: Run linting
+        run: |
+          poetry run ruff check src/ tests/
+          poetry run black --check src/ tests/
+          poetry run mypy src/
+
+      - name: Run security scan
+        run: poetry run bandit -r src/
+
+      - name: Run tests
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: |
+          poetry run pytest tests/ -v \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-fail-under=85
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+  model-validation:
+    name: Model Validation
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+
+      - name: Load cached virtual environment
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Download test models
+        run: |
+          mkdir -p models/
+          # Download lightweight ONNX models for testing
+          wget -O models/complexity_classifier.onnx \
+            https://github.com/onnx/models/raw/main/text/machine_comprehension/bert-squad/model.onnx || \
+            echo "# Placeholder model file" > models/complexity_classifier.onnx
+
+      - name: Validate model loading
+        run: |
+          poetry run python -c "
+          import sys
+          sys.path.append('src')
+          try:
+              from core.models import ComplexityClassifier, LocalLLM
+              print('✓ Model imports successful')
+          except Exception as e:
+              print(f'✗ Model import failed: {e}')
+              sys.exit(1)
+          "
+
+      - name: Test model inference
+        run: |
+          poetry run python -c "
+          import sys
+          sys.path.append('src')
+          from core.models import ComplexityClassifier
+          try:
+              classifier = ComplexityClassifier('models/complexity_classifier.onnx')
+              result = classifier.predict_complexity('Test query for complexity analysis')
+              assert 0.0 <= result <= 1.0, f'Invalid complexity score: {result}'
+              print(f'✓ Model inference test passed (complexity: {result})')
+          except Exception as e:
+              print(f'✗ Model inference test failed: {e}')
+              sys.exit(1)
+          "
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, model-validation]
+    if: github.event_name == 'push'
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build.outputs.image-tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  infrastructure:
+    name: Infrastructure Validation
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.0"
+
+      - name: Terraform Init
+        run: terraform -chdir=terraform init -backend=false
+
+      - name: Terraform Format Check
+        run: terraform -chdir=terraform fmt -check
+
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate
+
+      - name: Terraform Plan (Dry Run)
+        run: |
+          terraform -chdir=terraform plan \
+            -var="project_id=dummy-project" \
+            -var="region=us-central1" \
+            -var="environment=test" \
+            -out=tfplan
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, security-scan, infrastructure]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY_STAGING }}
+          project_id: ${{ secrets.GCP_PROJECT_ID_STAGING }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy llm-inference-router-staging \
+            --image=${{ needs.build.outputs.image-tag }} \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=2Gi \
+            --cpu=2 \
+            --concurrency=100 \
+            --timeout=300 \
+            --min-instances=0 \
+            --max-instances=10 \
+            --set-env-vars="ENVIRONMENT=staging,REDIS_URL=${{ secrets.REDIS_URL_STAGING }}"
+
+      - name: Run smoke tests
+        run: |
+          ENDPOINT=$(gcloud run services describe llm-inference-router-staging \
+            --region=us-central1 --format='value(status.url)')
+          
+          # Wait for deployment
+          sleep 30
+          
+          # Health check
+          curl -f "$ENDPOINT/health" || exit 1
+          
+          # Basic functionality test
+          curl -f -X POST "$ENDPOINT/api/v1/query" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "What is machine learning?", "max_tokens": 100}' || exit 1
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, security-scan, infrastructure]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY_PRODUCTION }}
+          project_id: ${{ secrets.GCP_PROJECT_ID_PRODUCTION }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy llm-inference-router \
+            --image=${{ needs.build.outputs.image-tag }} \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=4Gi \
+            --cpu=4 \
+            --concurrency=100 \
+            --timeout=300 \
+            --min-instances=1 \
+            --max-instances=50 \
+            --set-env-vars="ENVIRONMENT=production,REDIS_URL=${{ secrets.REDIS_URL_PRODUCTION }}"
+
+      - name: Update traffic allocation
+        run: |
+          # Gradual rollout - start with 10% traffic
+          gcloud run services update-traffic llm-inference-router \
+            --region=us-central1 \
+            --to-revisions=LATEST=10
+
+      - name: Run comprehensive tests
+        run: |
+          ENDPOINT=$(gcloud run services describe llm-inference-router \
+            --region=us-central1 --format='value(status.url)')
+          
+          # Wait for deployment
+          sleep 60
+          
+          # Health check
+          curl -f "$ENDPOINT/health" || exit 1
+          
+          # Performance test
+          for i in {1..5}; do
+            curl -f -X POST "$ENDPOINT/api/v1/query" \
+              -H "Content-Type: application/json" \
+              -d '{"query": "Explain quantum computing", "max_tokens": 200}' || exit 1
+          done
+          
+          # Metrics endpoint test
+          curl -f "$ENDPOINT/metrics" || exit 1
+
+      - name: Complete traffic rollout
+        if: success()
+        run: |
+          # If tests pass, route 100% traffic to new version
+          gcloud run services update-traffic llm-inference-router \
+            --region=us-central1 \
+            --to-latest
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          # Rollback to previous revision
+          gcloud run services update-traffic llm-inference-router \
+            --region=us-central1 \
+            --to-revisions=LATEST=0
+
+      - name: Notify deployment status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
