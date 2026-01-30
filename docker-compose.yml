@@ -1,0 +1,167 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: llm-router-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - llm-router
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: llm-router-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+    networks:
+      - llm-router
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: llm-router-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - prometheus
+    networks:
+      - llm-router
+
+  llm-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: llm-router-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - REDIS_URL=redis://redis:6379
+      - PROMETHEUS_PORT=8001
+      - MODEL_CACHE_DIR=/app/models
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MAX_CONCURRENT_REQUESTS=10
+      - REQUEST_TIMEOUT_SECONDS=30
+      - CACHE_TTL_SECONDS=3600
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./models:/app/models
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    networks:
+      - llm-router
+
+  model-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: model-downloader
+    container_name: llm-router-downloader
+    environment:
+      - MODEL_CACHE_DIR=/app/models
+      - HF_HUB_CACHE=/app/models/huggingface
+    volumes:
+      - ./models:/app/models
+    command: python scripts/download_models.py
+    networks:
+      - llm-router
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: llm-router-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      llm-router:
+        condition: service_healthy
+    networks:
+      - llm-router
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.49
+    container_name: llm-router-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=memory
+    networks:
+      - llm-router
+
+volumes:
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  llm-router:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
