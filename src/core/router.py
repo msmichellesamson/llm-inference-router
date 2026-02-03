@@ -1,109 +1,87 @@
-from typing import Dict, List, Optional
-import asyncio
 import logging
-from dataclasses import dataclass
-
-from .models import ModelProvider, ModelConfig
-from .complexity_analyzer import ComplexityAnalyzer, ComplexityScore
-from .metrics import MetricsCollector
+from typing import Dict, List, Optional
+from .models import LLMEndpoint, RoutingRequest, RoutingResponse
+from .complexity_analyzer import ComplexityAnalyzer
 from .load_balancer import LoadBalancer
+from .circuit_breaker import CircuitBreakerManager
+from .metrics import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class RoutingDecision:
-    provider: ModelProvider
-    model: str
-    complexity_score: ComplexityScore
-    estimated_cost: float
-    estimated_latency: float
-
 class LLMRouter:
-    """Intelligent LLM router that optimizes for cost and latency."""
-    
-    def __init__(self, models: List[ModelConfig]):
-        self.models = {model.name: model for model in models}
+    def __init__(self):
+        self.endpoints: Dict[str, LLMEndpoint] = {}
         self.complexity_analyzer = ComplexityAnalyzer()
-        self.metrics = MetricsCollector()
         self.load_balancer = LoadBalancer()
-        
-        # Route thresholds
-        self.local_threshold = 0.3  # Use local for simple queries
-        self.cloud_threshold = 0.7  # Use premium cloud for complex queries
+        self.circuit_breaker = CircuitBreakerManager()
+        self.metrics = MetricsCollector()
     
-    async def route_query(self, query: str, user_id: str) -> RoutingDecision:
-        """Route query to optimal model based on complexity analysis."""
+    def register_endpoint(self, endpoint: LLMEndpoint):
+        """Register a new LLM endpoint"""
+        self.endpoints[endpoint.name] = endpoint
+        logger.info(f"Registered endpoint: {endpoint.name}")
+    
+    async def route_request(self, request: RoutingRequest) -> RoutingResponse:
+        """Route request to optimal endpoint with circuit breaker protection"""
         try:
-            # Analyze query complexity
-            complexity = self.complexity_analyzer.analyze(query)
+            # Analyze complexity
+            complexity = await self.complexity_analyzer.analyze(request.prompt)
             
-            # Select model based on complexity
-            model = self._select_model(complexity)
+            # Filter available endpoints by circuit breaker state
+            available_endpoints = [
+                ep for ep in self.endpoints.values() 
+                if self.circuit_breaker.is_available(ep.name)
+            ]
             
-            # Get cost and latency estimates
-            estimated_cost = self._estimate_cost(model, complexity.token_count)
-            estimated_latency = self._estimate_latency(model)
+            if not available_endpoints:
+                raise Exception("No available endpoints - all circuit breakers open")
             
-            decision = RoutingDecision(
-                provider=model.provider,
-                model=model.name,
-                complexity_score=complexity,
-                estimated_cost=estimated_cost,
-                estimated_latency=estimated_latency
+            # Select optimal endpoint
+            selected = self.load_balancer.select_endpoint(
+                available_endpoints, complexity, request.priority
             )
             
-            # Record routing decision
-            self.metrics.record_routing_decision(decision, user_id)
+            # Execute request with circuit breaker
+            start_time = self.metrics.start_timer()
             
-            logger.info(
-                f"Routed query to {model.name} "
-                f"(complexity: {complexity.score:.2f}, "
-                f"cost: ${estimated_cost:.4f})"
-            )
-            
-            return decision
-            
+            try:
+                response = await self._execute_request(selected, request)
+                self.circuit_breaker.record_success(selected.name)
+                
+                # Record metrics
+                self.metrics.record_request(
+                    endpoint=selected.name,
+                    latency=self.metrics.end_timer(start_time),
+                    tokens=len(response.content.split()),
+                    cost=selected.cost_per_token * len(response.content.split())
+                )
+                
+                return response
+                
+            except Exception as e:
+                self.circuit_breaker.record_failure(selected.name)
+                logger.error(f"Request failed for {selected.name}: {e}")
+                raise
+                
         except Exception as e:
-            logger.error(f"Error routing query: {e}")
-            # Fallback to default model
-            fallback = self._get_fallback_model()
-            return RoutingDecision(fallback.provider, fallback.name, complexity, 0.0, 0.0)
+            logger.error(f"Routing failed: {e}")
+            raise
     
-    def _select_model(self, complexity: ComplexityScore) -> ModelConfig:
-        """Select optimal model based on complexity score."""
-        if complexity.score <= self.local_threshold:
-            # Simple queries -> local model
-            return self._get_local_model()
-        elif complexity.score >= self.cloud_threshold:
-            # Complex queries -> premium cloud model
-            return self._get_premium_model()
-        else:
-            # Medium complexity -> balanced cloud model
-            return self._get_balanced_model()
+    async def _execute_request(self, endpoint: LLMEndpoint, request: RoutingRequest) -> RoutingResponse:
+        """Execute request against specific endpoint"""
+        # This would integrate with actual LLM APIs
+        # For now, return mock response
+        return RoutingResponse(
+            content=f"Mock response from {endpoint.name}",
+            endpoint_used=endpoint.name,
+            latency_ms=endpoint.avg_latency,
+            cost=endpoint.cost_per_token * 100
+        )
     
-    def _get_local_model(self) -> ModelConfig:
-        """Get best available local model."""
-        local_models = [m for m in self.models.values() if m.provider == ModelProvider.LOCAL]
-        return local_models[0] if local_models else self._get_fallback_model()
-    
-    def _get_premium_model(self) -> ModelConfig:
-        """Get premium cloud model for complex queries."""
-        premium_models = [m for m in self.models.values() 
-                         if m.provider in [ModelProvider.OPENAI, ModelProvider.ANTHROPIC]]
-        return premium_models[0] if premium_models else self._get_fallback_model()
-    
-    def _get_balanced_model(self) -> ModelConfig:
-        """Get balanced model for medium complexity."""
-        return list(self.models.values())[0]  # Simple selection for now
-    
-    def _get_fallback_model(self) -> ModelConfig:
-        """Get fallback model when routing fails."""
-        return list(self.models.values())[0]
-    
-    def _estimate_cost(self, model: ModelConfig, tokens: int) -> float:
-        """Estimate query cost based on model and token count."""
-        return model.cost_per_token * tokens
-    
-    def _estimate_latency(self, model: ModelConfig) -> float:
-        """Estimate query latency based on model type."""
-        return model.avg_latency_ms
+    def get_health(self) -> Dict:
+        """Get router health including circuit breaker status"""
+        return {
+            "endpoints": len(self.endpoints),
+            "circuit_breakers": self.circuit_breaker.get_status(),
+            "metrics": self.metrics.get_summary()
+        }
