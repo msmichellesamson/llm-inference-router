@@ -1,10 +1,9 @@
-import asyncio
-import random
 import time
-from enum import Enum
-from typing import Dict, Optional
-from dataclasses import dataclass
 import logging
+from enum import Enum
+from typing import Optional, Callable, Any
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -13,92 +12,100 @@ class CircuitState(Enum):
     OPEN = "open"
     HALF_OPEN = "half_open"
 
+class ErrorType(Enum):
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    SERVER_ERROR = "server_error"
+    RATE_LIMIT = "rate_limit"
+    UNKNOWN = "unknown"
+
 @dataclass
-class CircuitConfig:
+class CircuitBreakerConfig:
     failure_threshold: int = 5
-    recovery_timeout: int = 60
-    success_threshold: int = 3
+    recovery_timeout: int = 30
+    half_open_max_calls: int = 3
+    exponential_backoff: bool = True
     max_backoff: int = 300
-    base_delay: float = 1.0
 
 class CircuitBreaker:
-    def __init__(self, name: str, config: Optional[CircuitConfig] = None):
+    def __init__(self, name: str, config: CircuitBreakerConfig):
         self.name = name
-        self.config = config or CircuitConfig()
+        self.config = config
         self.state = CircuitState.CLOSED
         self.failure_count = 0
-        self.success_count = 0
-        self.last_failure_time = 0
-        self.next_attempt_time = 0
+        self.half_open_calls = 0
+        self.last_failure_time: Optional[datetime] = None
+        self.backoff_multiplier = 1
         
-    def _calculate_backoff_delay(self) -> float:
-        """Calculate exponential backoff with jitter"""
-        if self.failure_count == 0:
-            return 0
+    def call(self, func: Callable, *args, **kwargs) -> Any:
+        if self.state == CircuitState.OPEN:
+            if not self._should_attempt_reset():
+                raise Exception(f"Circuit breaker {self.name} is OPEN")
+            self._transition_to_half_open()
             
-        # Exponential backoff: base_delay * 2^(failure_count-1)
-        delay = self.config.base_delay * (2 ** (self.failure_count - 1))
-        delay = min(delay, self.config.max_backoff)
+        try:
+            result = func(*args, **kwargs)
+            self._on_success()
+            return result
+        except Exception as e:
+            error_type = self._categorize_error(e)
+            self._on_failure(error_type)
+            raise
+            
+    def _categorize_error(self, error: Exception) -> ErrorType:
+        error_str = str(error).lower()
+        if "timeout" in error_str:
+            return ErrorType.TIMEOUT
+        elif "connection" in error_str:
+            return ErrorType.CONNECTION
+        elif "rate limit" in error_str or "429" in error_str:
+            return ErrorType.RATE_LIMIT
+        elif "500" in error_str or "502" in error_str or "503" in error_str:
+            return ErrorType.SERVER_ERROR
+        return ErrorType.UNKNOWN
         
-        # Add jitter (±25%)
-        jitter = delay * 0.25 * (2 * random.random() - 1)
-        return max(0, delay + jitter)
+    def _on_success(self):
+        self.failure_count = 0
+        self.backoff_multiplier = 1
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.CLOSED
+            logger.info(f"Circuit breaker {self.name} transitioned to CLOSED")
+            
+    def _on_failure(self, error_type: ErrorType):
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
         
-    def can_attempt(self) -> bool:
-        """Check if request can be attempted based on circuit state"""
-        current_time = time.time()
+        if self.state == CircuitState.HALF_OPEN:
+            self._transition_to_open()
+        elif self.failure_count >= self.config.failure_threshold:
+            self._transition_to_open()
+            
+        logger.warning(f"Circuit breaker {self.name} failure #{self.failure_count}, type: {error_type.value}")
         
-        if self.state == CircuitState.CLOSED:
+    def _transition_to_open(self):
+        self.state = CircuitState.OPEN
+        if self.config.exponential_backoff:
+            self.backoff_multiplier = min(self.backoff_multiplier * 2, self.config.max_backoff // self.config.recovery_timeout)
+        logger.error(f"Circuit breaker {self.name} transitioned to OPEN")
+        
+    def _transition_to_half_open(self):
+        self.state = CircuitState.HALF_OPEN
+        self.half_open_calls = 0
+        logger.info(f"Circuit breaker {self.name} transitioned to HALF_OPEN")
+        
+    def _should_attempt_reset(self) -> bool:
+        if not self.last_failure_time:
             return True
             
-        if self.state == CircuitState.OPEN:
-            if current_time >= self.next_attempt_time:
-                self.state = CircuitState.HALF_OPEN
-                self.success_count = 0
-                logger.info(f"Circuit breaker {self.name} transitioning to HALF_OPEN")
-                return True
-            return False
-            
-        # HALF_OPEN state
-        return True
+        timeout = self.config.recovery_timeout * self.backoff_multiplier
+        elapsed = (datetime.now() - self.last_failure_time).total_seconds()
+        return elapsed >= timeout
         
-    def record_success(self):
-        """Record successful request"""
-        if self.state == CircuitState.HALF_OPEN:
-            self.success_count += 1
-            if self.success_count >= self.config.success_threshold:
-                self.state = CircuitState.CLOSED
-                self.failure_count = 0
-                logger.info(f"Circuit breaker {self.name} recovered to CLOSED")
-        elif self.state == CircuitState.CLOSED:
-            self.failure_count = max(0, self.failure_count - 1)
-            
-    def record_failure(self):
-        """Record failed request with exponential backoff"""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-        
-        if self.state == CircuitState.CLOSED:
-            if self.failure_count >= self.config.failure_threshold:
-                self.state = CircuitState.OPEN
-                backoff_delay = self._calculate_backoff_delay()
-                self.next_attempt_time = time.time() + backoff_delay
-                logger.warning(
-                    f"Circuit breaker {self.name} opened. Next attempt in {backoff_delay:.2f}s"
-                )
-        elif self.state == CircuitState.HALF_OPEN:
-            self.state = CircuitState.OPEN
-            backoff_delay = self._calculate_backoff_delay()
-            self.next_attempt_time = time.time() + backoff_delay
-            logger.warning(f"Circuit breaker {self.name} failed in HALF_OPEN, reopened")
-            
-    def get_stats(self) -> Dict:
-        """Get circuit breaker statistics"""
+    @property
+    def metrics(self) -> dict:
         return {
-            "name": self.name,
             "state": self.state.value,
             "failure_count": self.failure_count,
-            "success_count": self.success_count,
-            "last_failure_time": self.last_failure_time,
-            "next_attempt_time": self.next_attempt_time if self.state == CircuitState.OPEN else None
+            "backoff_multiplier": self.backoff_multiplier,
+            "last_failure": self.last_failure_time.isoformat() if self.last_failure_time else None
         }
