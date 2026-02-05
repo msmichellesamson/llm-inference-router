@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-router-config
+  namespace: default
+data:
+  models.yaml: |
+    local_models:
+      - name: "llama-7b"
+        endpoint: "http://ollama:11434/api/generate"
+        max_tokens: 4096
+        cost_per_token: 0.0
+        latency_threshold: 2000
+        complexity_threshold: 0.7
+      - name: "codellama-13b"
+        endpoint: "http://ollama:11434/api/generate"
+        max_tokens: 8192
+        cost_per_token: 0.0
+        latency_threshold: 3000
+        complexity_threshold: 0.8
+    cloud_models:
+      - name: "gpt-4"
+        endpoint: "https://api.openai.com/v1/chat/completions"
+        max_tokens: 8192
+        cost_per_token: 0.03
+        latency_threshold: 5000
+        complexity_threshold: 0.3
+      - name: "claude-3-haiku"
+        endpoint: "https://api.anthropic.com/v1/messages"
+        max_tokens: 4096
+        cost_per_token: 0.00025
+        latency_threshold: 3000
+        complexity_threshold: 0.5
+  config.yaml: |
+    routing:
+      default_strategy: "cost_optimized"
+      fallback_model: "gpt-4"
+      cache_ttl: 3600
+      max_retries: 3
+    redis:
+      host: "redis-service"
+      port: 6379
+      db: 0
+    metrics:
+      enabled: true
+      port: 8080
+      path: "/metrics"
