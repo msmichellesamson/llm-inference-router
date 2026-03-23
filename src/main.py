@@ -1,50 +1,60 @@
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException
+from src.api.health import router as health_router
+from src.api.metrics import router as metrics_router
+from src.core.router import LLMRouter
+from src.core.models import QueryRequest, QueryResponse
+from src.api.metrics import metrics
+import uuid
 import logging
 
-from .core.router import InferenceRouter
-from .api.health import router as health_router
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan management."""
-    logger.info("Starting LLM Inference Router")
-    yield
-    logger.info("Shutting down LLM Inference Router")
-
-
-app = FastAPI(
-    title="LLM Inference Router",
-    description="Multi-model LLM router with cost and latency optimization",
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="LLM Inference Router", version="1.0.0")
 
 # Include routers
-app.include_router(health_router, prefix="/api/v1", tags=["health"])
+app.include_router(health_router, prefix="/health")
+app.include_router(metrics_router, prefix="/monitoring")
 
-# Global router instance
-router = InferenceRouter()
+# Initialize LLM router
+llm_router = LLMRouter()
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-@app.post("/api/v1/inference")
-async def inference(request: dict):
-    """Main inference endpoint."""
+@app.post("/query", response_model=QueryResponse)
+async def route_query(request: QueryRequest):
+    """Route LLM query to optimal model based on complexity analysis"""
+    request_id = str(uuid.uuid4())
+    
     try:
-        result = await router.route_request(request)
-        return result
+        # Analyze complexity and route request
+        routing_decision = await llm_router.route_request(request)
+        model = routing_decision.selected_model
+        complexity = routing_decision.complexity_level
+        reason = routing_decision.routing_reason
+        
+        # Record metrics
+        metrics.record_routing_decision(model, complexity, reason)
+        metrics.start_request_timer(request_id, model)
+        
+        # Process request (placeholder for actual model inference)
+        response = QueryResponse(
+            content=f"Response from {model}",
+            model=model,
+            tokens_used=150,
+            latency_ms=routing_decision.estimated_latency
+        )
+        
+        metrics.end_request_timer(request_id, model, "success")
+        
+        logger.info(
+            f"Routed query to {model} (complexity: {complexity}, reason: {reason})"
+        )
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"Inference failed: {str(e)}")
-        raise
-
+        metrics.end_request_timer(request_id, "unknown", "error")
+        logger.error(f"Query routing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 if __name__ == "__main__":
     import uvicorn
