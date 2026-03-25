@@ -1,83 +1,86 @@
-import asyncio
+"""Circuit breaker implementation for model endpoints."""
+
 import time
 from enum import Enum
 from typing import Dict, Optional
 from dataclasses import dataclass
-from contextlib import asynccontextmanager
 import logging
+
+from .exceptions import CircuitOpenError, ModelUnavailableError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
+
 class CircuitState(Enum):
     CLOSED = "closed"
-    OPEN = "open" 
+    OPEN = "open"
     HALF_OPEN = "half_open"
+
 
 @dataclass
 class CircuitConfig:
     failure_threshold: int = 5
-    recovery_timeout: int = 60
-    max_backoff: int = 300
-    backoff_multiplier: float = 2.0
+    timeout: int = 60
+    recovery_timeout: int = 30
+
 
 class CircuitBreaker:
-    def __init__(self, name: str, config: CircuitConfig = None):
-        self.name = name
+    """Circuit breaker for model endpoints."""
+    
+    def __init__(self, config: CircuitConfig = None):
         self.config = config or CircuitConfig()
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time: Optional[float] = None
-        self.current_backoff = 1
+        self.circuits: Dict[str, dict] = {}
+    
+    def call(self, model_id: str, func, *args, **kwargs):
+        """Execute function with circuit breaker protection."""
+        circuit = self._get_circuit(model_id)
         
-    async def call(self, func, *args, **kwargs):
-        """Execute function with circuit breaker protection"""
-        if self.state == CircuitState.OPEN:
-            if self._should_attempt_reset():
-                self.state = CircuitState.HALF_OPEN
-                logger.info(f"Circuit {self.name} moving to HALF_OPEN")
+        if circuit["state"] == CircuitState.OPEN:
+            if time.time() - circuit["opened_at"] > self.config.recovery_timeout:
+                logger.info(f"Circuit breaker transitioning to half-open: {model_id}")
+                circuit["state"] = CircuitState.HALF_OPEN
             else:
-                raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
-                
+                retry_after = int(self.config.recovery_timeout - (time.time() - circuit["opened_at"]))
+                raise CircuitOpenError(model_id, retry_after)
+        
         try:
-            result = await func(*args, **kwargs)
-            self._on_success()
+            result = func(*args, **kwargs)
+            self._on_success(model_id)
             return result
         except Exception as e:
-            self._on_failure()
+            self._on_failure(model_id, e)
             raise
-            
-    def _should_attempt_reset(self) -> bool:
-        """Check if enough time has passed to attempt reset"""
-        if not self.last_failure_time:
-            return True
-            
-        backoff_time = min(self.current_backoff, self.config.max_backoff)
-        return time.time() - self.last_failure_time >= backoff_time
+    
+    def _get_circuit(self, model_id: str) -> dict:
+        """Get or create circuit state for model."""
+        if model_id not in self.circuits:
+            self.circuits[model_id] = {
+                "state": CircuitState.CLOSED,
+                "failure_count": 0,
+                "opened_at": None,
+                "last_failure": None
+            }
+        return self.circuits[model_id]
+    
+    def _on_success(self, model_id: str):
+        """Handle successful call."""
+        circuit = self.circuits[model_id]
+        if circuit["state"] == CircuitState.HALF_OPEN:
+            logger.info(f"Circuit breaker closed after recovery: {model_id}")
+        circuit.update({
+            "state": CircuitState.CLOSED,
+            "failure_count": 0,
+            "opened_at": None
+        })
+    
+    def _on_failure(self, model_id: str, error: Exception):
+        """Handle failed call."""
+        circuit = self.circuits[model_id]
+        circuit["failure_count"] += 1
+        circuit["last_failure"] = str(error)
         
-    def _on_success(self):
-        """Reset circuit breaker on successful call"""
-        if self.state == CircuitState.HALF_OPEN:
-            logger.info(f"Circuit {self.name} reset to CLOSED")
-            
-        self.failure_count = 0
-        self.state = CircuitState.CLOSED
-        self.current_backoff = 1
-        
-    def _on_failure(self):
-        """Handle failure and update circuit state"""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-        
-        if self.failure_count >= self.config.failure_threshold:
-            self.state = CircuitState.OPEN
-            self.current_backoff = min(
-                self.current_backoff * self.config.backoff_multiplier,
-                self.config.max_backoff
-            )
-            logger.warning(
-                f"Circuit {self.name} opened after {self.failure_count} failures. "
-                f"Backoff: {self.current_backoff}s"
-            )
-            
-class CircuitBreakerOpenError(Exception):
-    pass
+        if circuit["failure_count"] >= self.config.failure_threshold:
+            if circuit["state"] != CircuitState.OPEN:
+                logger.warning(f"Circuit breaker opened for {model_id} after {circuit['failure_count']} failures")
+                circuit["state"] = CircuitState.OPEN
+                circuit["opened_at"] = time.time()
