@@ -1,101 +1,73 @@
-"""Retry mechanism with exponential backoff for model requests."""
-
 import asyncio
 import random
-from typing import Any, Callable, Optional, TypeVar
+from typing import Callable, Any, Optional
 from functools import wraps
-import logging
+from .exceptions import ModelTimeoutError, ModelUnavailableError
+from .metrics import MetricsCollector
 
-from .exceptions import ModelUnavailableError, RateLimitError
-
-T = TypeVar('T')
-
-logger = logging.getLogger(__name__)
 
 class RetryConfig:
-    """Configuration for retry behavior."""
-    
     def __init__(
         self,
         max_attempts: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
-        backoff_multiplier: float = 2.0,
+        backoff_factor: float = 2.0,
         jitter: bool = True
     ):
         self.max_attempts = max_attempts
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self.backoff_multiplier = backoff_multiplier
+        self.backoff_factor = backoff_factor
         self.jitter = jitter
 
-class RetryHandler:
-    """Handles retry logic with exponential backoff."""
-    
-    RETRYABLE_EXCEPTIONS = (
-        ModelUnavailableError,
-        RateLimitError,
-        ConnectionError,
-        TimeoutError
-    )
-    
-    def __init__(self, config: RetryConfig = None):
-        self.config = config or RetryConfig()
-    
-    def _calculate_delay(self, attempt: int) -> float:
-        """Calculate delay for given attempt with exponential backoff."""
-        delay = min(
-            self.config.base_delay * (self.config.backoff_multiplier ** (attempt - 1)),
-            self.config.max_delay
-        )
-        
-        if self.config.jitter:
-            delay *= (0.5 + random.random() / 2)  # Add 0-50% jitter
-        
-        return delay
-    
-    async def retry_async(
-        self,
-        func: Callable[..., Any],
-        *args,
-        **kwargs
-    ) -> Any:
-        """Retry async function with exponential backoff."""
-        last_exception = None
-        
-        for attempt in range(1, self.config.max_attempts + 1):
-            try:
-                logger.debug(f"Attempt {attempt}/{self.config.max_attempts} for {func.__name__}")
-                return await func(*args, **kwargs)
-            
-            except self.RETRYABLE_EXCEPTIONS as e:
-                last_exception = e
-                logger.warning(
-                    f"Attempt {attempt} failed for {func.__name__}: {e}"
-                )
-                
-                if attempt < self.config.max_attempts:
-                    delay = self._calculate_delay(attempt)
-                    logger.info(f"Retrying in {delay:.2f}s")
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"All {self.config.max_attempts} attempts failed")
-                    break
-            
-            except Exception as e:
-                logger.error(f"Non-retryable error in {func.__name__}: {e}")
-                raise
-        
-        raise last_exception
 
-def with_retry(config: RetryConfig = None):
-    """Decorator to add retry behavior to async functions."""
-    retry_handler = RetryHandler(config)
-    
-    def decorator(func):
+def with_retry(config: RetryConfig, metrics: MetricsCollector):
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
-            return await retry_handler.retry_async(func, *args, **kwargs)
+        async def wrapper(*args, **kwargs) -> Any:
+            last_exception = None
+            
+            for attempt in range(config.max_attempts):
+                try:
+                    result = await func(*args, **kwargs)
+                    if attempt > 0:
+                        metrics.increment('retry_success_total', {'attempt': str(attempt + 1)})
+                    return result
+                    
+                except (ModelTimeoutError, ModelUnavailableError, ConnectionError) as e:
+                    last_exception = e
+                    metrics.increment('retry_attempt_total', {
+                        'exception': type(e).__name__,
+                        'attempt': str(attempt + 1)
+                    })
+                    
+                    if attempt < config.max_attempts - 1:
+                        delay = min(
+                            config.base_delay * (config.backoff_factor ** attempt),
+                            config.max_delay
+                        )
+                        
+                        if config.jitter:
+                            delay *= (0.5 + random.random() * 0.5)
+                        
+                        await asyncio.sleep(delay)
+                    
+                except Exception as e:
+                    # Non-retryable errors fail immediately
+                    metrics.increment('retry_non_retryable_total', {
+                        'exception': type(e).__name__
+                    })
+                    raise
+            
+            metrics.increment('retry_exhausted_total')
+            raise last_exception
+            
         return wrapper
-    
     return decorator
+
+
+# Global retry configurations
+DEFAULT_RETRY = RetryConfig(max_attempts=3, base_delay=1.0)
+AGGRESSIVE_RETRY = RetryConfig(max_attempts=5, base_delay=0.5, backoff_factor=1.5)
+CONSERVATIVE_RETRY = RetryConfig(max_attempts=2, base_delay=2.0, backoff_factor=3.0)
