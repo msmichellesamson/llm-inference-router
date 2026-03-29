@@ -2,25 +2,30 @@
 
 Multi-model LLM router that optimizes cost and latency by intelligently routing queries to local/cloud models based on complexity analysis.
 
-## Architecture
+## Features
+- **Intelligent Routing**: Query complexity analysis routes to optimal model
+- **Cost Optimization**: Prefer local models for simple queries
+- **Circuit Breaker**: Automatic failover when models are unhealthy
+- **Load Balancing**: Distribute load across model replicas
+- **Redis Caching**: Cache responses for improved latency
+- **Prometheus Metrics**: Comprehensive observability
 
-- **Complexity Analysis**: Analyzes query complexity to route between local/cloud models
-- **Load Balancing**: Distributes requests across available model endpoints
-- **Circuit Breaker**: Prevents cascade failures with automatic fallback
-- **Redis Caching**: Response caching with configurable TTL
-- **Monitoring**: Prometheus metrics + Grafana dashboards
+## Architecture
+```
+Query → Complexity Analysis → Router → [Local Model | Cloud API]
+                                    ↓
+                              Redis Cache ← Metrics
+```
 
 ## Skills Demonstrated
-
-- **AI/ML**: Model routing, complexity analysis, LLM inference optimization
-- **Infrastructure**: Kubernetes, Terraform, Ingress with rate limiting
-- **Backend**: FastAPI, distributed routing, circuit breaker patterns
-- **Database**: Redis caching, connection pooling
-- **DevOps**: Docker, K8s deployments, CI/CD pipeline
+- **AI/ML**: Model serving, inference optimization, query analysis
+- **Backend**: FastAPI, async processing, circuit breakers
+- **Infrastructure**: Kubernetes, Terraform, monitoring
+- **Database**: Redis caching, query optimization
 - **SRE**: Prometheus metrics, health checks, observability
+- **DevOps**: Docker, K8s manifests, CI/CD
 
 ## Quick Start
-
 ```bash
 # Local development
 docker-compose up
@@ -28,28 +33,24 @@ docker-compose up
 # Kubernetes deployment
 kubectl apply -f k8s/
 
-# Test routing
-curl -X POST localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+# Infrastructure
+cd terraform && terraform apply
 ```
 
-## Configuration
-
-- **LOCAL_MODEL_URL**: Local model endpoint (default: ollama:11434)
-- **CLOUD_MODEL_URL**: Cloud model endpoint
-- **REDIS_URL**: Redis connection string
-- **COMPLEXITY_THRESHOLD**: Routing threshold (0.0-1.0)
+## API Endpoints
+- `POST /inference` - Route LLM queries
+- `GET /health` - Health check
+- `GET /metrics` - Prometheus metrics
 
 ## Monitoring
+Prometheus ServiceMonitor automatically scrapes:
+- Request latency and error rates
+- Model performance metrics
+- Circuit breaker states
+- Cache hit rates
 
-- Health: `/health`
-- Metrics: `/metrics`
-- Grafana: Port 3000 (admin/admin)
-
-## Infrastructure
-
-- **Terraform**: GKE cluster, monitoring stack
-- **Kubernetes**: Multi-replica deployment with HPA
-- **Ingress**: Rate limiting, SSL termination
-- **Monitoring**: Prometheus + Grafana + AlertManager
+## Configuration
+Set via environment variables:
+- `REDIS_URL`: Redis connection string
+- `LOCAL_MODEL_URL`: Local model endpoint
+- `CLOUD_API_KEY`: Cloud provider API key
