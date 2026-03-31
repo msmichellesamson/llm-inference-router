@@ -1,139 +1,90 @@
-import asyncio
-import time
-from typing import Dict, Any, Optional
-from .models import ModelType, RoutingDecision, QueryRequest
+import logging
+from typing import List, Dict, Any, Optional
+from .models import ModelProvider, RoutingDecision, QueryRequest
 from .complexity_analyzer import ComplexityAnalyzer
 from .load_balancer import LoadBalancer
 from .circuit_breaker import CircuitBreaker
-from .exceptions import RouterError, ModelTimeoutError
-from .metrics import RouterMetrics
-import logging
+from .exceptions import RoutingError, ModelUnavailableError
+from .context import get_correlation_id, get_context
 
 logger = logging.getLogger(__name__)
 
 class LLMRouter:
-    def __init__(self, config: Dict[str, Any]):
+    """Routes queries to optimal LLM providers based on complexity and availability."""
+    
+    def __init__(self, providers: List[ModelProvider]):
+        self.providers = {p.name: p for p in providers}
         self.complexity_analyzer = ComplexityAnalyzer()
-        self.load_balancer = LoadBalancer(config.get('models', {}))
-        self.circuit_breaker = CircuitBreaker()
-        self.metrics = RouterMetrics()
-        self.default_timeout = config.get('timeout_seconds', 30)
-        self.fallback_timeout = config.get('fallback_timeout_seconds', 10)
-        
+        self.load_balancer = LoadBalancer(providers)
+        self.circuit_breakers = {
+            p.name: CircuitBreaker(failure_threshold=5, timeout=60)
+            for p in providers
+        }
+    
     async def route_query(self, request: QueryRequest) -> RoutingDecision:
-        """Route query with timeout handling and graceful fallback"""
-        start_time = time.time()
+        """Route query to best available provider."""
+        correlation_id = get_correlation_id()
+        context = get_context()
         
-        try:
-            # Analyze complexity with timeout
-            complexity_task = asyncio.create_task(
-                self._analyze_with_timeout(request)
-            )
-            
-            complexity_score = await asyncio.wait_for(
-                complexity_task, 
-                timeout=self.default_timeout
-            )
-            
-            # Get available models
-            available_models = self.load_balancer.get_available_models()
-            
-            # Make routing decision
-            decision = self._make_routing_decision(
-                complexity_score, 
-                available_models, 
-                request
-            )
-            
-            # Record metrics
-            self.metrics.record_routing_decision(
-                decision.model_type,
-                complexity_score,
-                time.time() - start_time
-            )
-            
-            logger.info(f"Routed query to {decision.model_type.value} "
-                       f"(complexity: {complexity_score:.2f})")
-            
-            return decision
-            
-        except asyncio.TimeoutError:
-            logger.warning(f"Router timeout after {self.default_timeout}s, using fallback")
-            return await self._fallback_routing(request)
-            
-        except Exception as e:
-            logger.error(f"Router error: {e}")
-            self.metrics.record_error('routing_error')
-            raise RouterError(f"Failed to route query: {e}")
-    
-    async def _analyze_with_timeout(self, request: QueryRequest) -> float:
-        """Analyze complexity with built-in timeout protection"""
-        try:
-            return await self.complexity_analyzer.analyze(request.query)
-        except Exception as e:
-            logger.warning(f"Complexity analysis failed: {e}")
-            # Return medium complexity as safe default
-            return 0.5
-    
-    async def _fallback_routing(self, request: QueryRequest) -> RoutingDecision:
-        """Fast fallback routing when primary analysis times out"""
-        try:
-            # Quick heuristic: route short queries to local, long to cloud
-            is_simple = len(request.query.split()) < 20
-            
-            available_models = self.load_balancer.get_available_models()
-            
-            if is_simple and ModelType.LOCAL in available_models:
-                model_type = ModelType.LOCAL
-            else:
-                model_type = ModelType.CLOUD
-            
-            decision = RoutingDecision(
-                model_type=model_type,
-                model_name=available_models[model_type][0],
-                confidence=0.6,  # Lower confidence for fallback
-                estimated_cost=0.001 if model_type == ModelType.LOCAL else 0.01,
-                estimated_latency=1.0 if model_type == ModelType.LOCAL else 3.0
-            )
-            
-            self.metrics.record_fallback_routing()
-            logger.info(f"Used fallback routing to {model_type.value}")
-            
-            return decision
-            
-        except Exception as e:
-            logger.error(f"Fallback routing failed: {e}")
-            raise RouterError(f"All routing methods failed: {e}")
-    
-    def _make_routing_decision(
-        self, 
-        complexity: float, 
-        available_models: Dict[ModelType, list],
-        request: QueryRequest
-    ) -> RoutingDecision:
-        """Make routing decision based on complexity and availability"""
-        # Route complex queries to cloud models
-        if complexity > 0.7 and ModelType.CLOUD in available_models:
-            model_type = ModelType.CLOUD
-            estimated_cost = complexity * 0.02
-            estimated_latency = 2.0 + complexity * 2.0
-        # Route simple queries to local models when available
-        elif complexity < 0.3 and ModelType.LOCAL in available_models:
-            model_type = ModelType.LOCAL
-            estimated_cost = 0.001
-            estimated_latency = 0.5 + complexity * 1.0
-        # Default to cloud for medium complexity or when local unavailable
-        else:
-            model_type = ModelType.CLOUD if ModelType.CLOUD in available_models else ModelType.LOCAL
-            estimated_cost = 0.01
-            estimated_latency = 3.0
-        
-        model_name = available_models[model_type][0]
-        
-        return RoutingDecision(
-            model_type=model_type,
-            model_name=model_name,
-            confidence=min(0.9, 0.5 + complexity),
-            estimated_cost=estimated_cost,
-            estimated_latency=estimated_latency
+        logger.info(
+            f"Routing query [correlation_id={correlation_id}] "
+            f"user_id={getattr(context, 'user_id', None)} "
+            f"preference={getattr(context, 'model_preference', None)}"
         )
+        
+        try:
+            # Analyze query complexity
+            complexity = await self.complexity_analyzer.analyze(request.query)
+            
+            # Check user preference from context
+            preferred_provider = None
+            if context and context.model_preference:
+                preferred_provider = context.model_preference
+                logger.debug(f"User preference: {preferred_provider} [correlation_id={correlation_id}]")
+            
+            # Get available providers
+            available_providers = self._get_healthy_providers()
+            
+            if not available_providers:
+                raise ModelUnavailableError("No healthy providers available")
+            
+            # Select provider based on complexity and preference
+            provider = self.load_balancer.select_provider(
+                available_providers, 
+                complexity,
+                preferred=preferred_provider
+            )
+            
+            logger.info(
+                f"Selected provider: {provider.name} for complexity: {complexity.score} "
+                f"[correlation_id={correlation_id}]"
+            )
+            
+            return RoutingDecision(
+                provider=provider,
+                complexity=complexity,
+                estimated_cost=self._estimate_cost(provider, request),
+                estimated_latency=self._estimate_latency(provider, complexity)
+            )
+            
+        except Exception as e:
+            logger.error(f"Routing failed [correlation_id={correlation_id}]: {e}")
+            raise RoutingError(f"Failed to route query: {str(e)}") from e
+    
+    def _get_healthy_providers(self) -> List[ModelProvider]:
+        """Get providers with healthy circuit breakers."""
+        return [
+            provider for name, provider in self.providers.items()
+            if not self.circuit_breakers[name].is_open
+        ]
+    
+    def _estimate_cost(self, provider: ModelProvider, request: QueryRequest) -> float:
+        """Estimate request cost."""
+        token_count = len(request.query.split()) * 1.3  # Rough estimation
+        return provider.cost_per_token * token_count
+    
+    def _estimate_latency(self, provider: ModelProvider, complexity) -> float:
+        """Estimate request latency."""
+        base_latency = provider.avg_latency_ms
+        complexity_multiplier = 1.0 + (complexity.score * 0.5)
+        return base_latency * complexity_multiplier
