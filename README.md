@@ -1,68 +1,58 @@
 # LLM Inference Router
 
-Intelligent multi-model LLM router that optimizes cost and latency by routing queries based on complexity analysis.
+Multi-model LLM router that optimizes cost and latency by intelligently routing queries to local/cloud models based on complexity analysis.
 
 ## Architecture
 
-```
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│   Client    │───▶│    Router    │───▶│   Models    │
-└─────────────┘    └──────────────┘    └─────────────┘
-                          │
-                          ▼
-                   ┌──────────────┐
-                   │ Complexity   │
-                   │ Analyzer     │
-                   └──────────────┘
-```
-
-## Quick Start
-
-```bash
-# Start with Docker Compose
-docker-compose up -d
-
-# Test the API
-curl -X POST http://localhost:8080/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello world"}'
-```
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `REDIS_URL` | `redis://localhost:6379` | Cache backend |
-| `OPENAI_API_KEY` | - | OpenAI API key |
-| `LOCAL_MODEL_URL` | `http://localhost:11434` | Local Ollama endpoint |
-
-## Monitoring
-
-- Health: `GET /health`
-- Metrics: `GET /metrics`
-- Grafana: `http://localhost:3000`
-
-## Troubleshooting
-
-### High Latency
-1. Check model availability: `kubectl get pods -l app=llm-router`
-2. Verify Redis connection: `redis-cli ping`
-3. Review circuit breaker status in metrics
-
-### Routing Failures
-1. Check complexity analyzer logs: `kubectl logs -l component=analyzer`
-2. Verify model endpoints are responding
-3. Check rate limits and quotas
-
-## API Documentation
-
-See `docs/api-spec.yaml` for complete OpenAPI specification.
+- **Smart Routing**: Complexity analysis determines local vs cloud model routing
+- **Circuit Breaker**: Fault tolerance with automatic fallback
+- **Redis Caching**: Response caching and metrics storage
+- **Load Balancing**: Distribute requests across model instances
+- **Observability**: Prometheus metrics, health checks, alerts
 
 ## Skills Demonstrated
 
-- **AI/ML**: Multi-model routing, complexity analysis
-- **Infrastructure**: Kubernetes, Terraform, Redis
+- **AI/ML**: Multi-model inference, complexity analysis, model serving
+- **Infrastructure**: Terraform, GCP, Kubernetes, Redis
+- **Backend**: FastAPI, gRPC, distributed routing
+- **DevOps**: Docker, K8s manifests, CI/CD
 - **SRE**: Circuit breakers, monitoring, alerting
-- **Backend**: FastAPI, async processing, load balancing
 - **Database**: Redis caching, query optimization
-- **DevOps**: Docker, K8s deployment, CI/CD
+
+## Infrastructure
+
+```bash
+# Deploy infrastructure
+cd terraform
+terraform init
+terraform plan
+terraform apply
+
+# Deploy to Kubernetes
+kubectl apply -f k8s/
+```
+
+## Local Development
+
+```bash
+# Start services
+docker-compose up
+
+# Run tests
+pytest tests/
+
+# API available at http://localhost:8000
+```
+
+## API Endpoints
+
+- `POST /route` - Route query to optimal model
+- `GET /health` - Health check
+- `GET /metrics` - Prometheus metrics
+
+## Configuration
+
+- Model thresholds via environment variables
+- Redis connection and caching settings
+- Circuit breaker parameters
+- Prometheus monitoring configuration
