@@ -1,0 +1,119 @@
+openapi: 3.0.3
+info:
+  title: LLM Inference Router API
+  description: Multi-model LLM router with intelligent routing and cost optimization
+  version: 1.0.0
+  contact:
+    name: Michelle Samson
+    email: michelle@example.com
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+  - url: https://llm-router.prod.example.com
+    description: Production server
+
+paths:
+  /v1/inference:
+    post:
+      summary: Generate LLM inference
+      description: Routes query to optimal model based on complexity analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InferenceRequest'
+      responses:
+        '200':
+          description: Successful inference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InferenceResponse'
+        '400':
+          description: Invalid request
+        '503':
+          description: Service unavailable
+
+  /health:
+    get:
+      summary: Service health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /metrics:
+    get:
+      summary: Service metrics
+      responses:
+        '200':
+          description: Current metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+components:
+  schemas:
+    InferenceRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          description: Input prompt for LLM
+        model_preference:
+          type: string
+          enum: [local, cloud]
+        max_tokens:
+          type: integer
+          minimum: 1
+          maximum: 4096
+          default: 100
+        temperature:
+          type: number
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+        timeout_ms:
+          type: integer
+          minimum: 1000
+          maximum: 120000
+          default: 30000
+
+    InferenceResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        model_used:
+          type: string
+        complexity_score:
+          type: number
+        latency_ms:
+          type: integer
+        tokens_used:
+          type: integer
+        cached:
+          type: boolean
+        cost_estimate:
+          type: number
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        models:
+          type: object
+        cache_hit_rate:
+          type: number
+        avg_latency_ms:
+          type: number
+        uptime_seconds:
+          type: integer
