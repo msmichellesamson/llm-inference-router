@@ -1,51 +1,33 @@
-"""Custom exceptions for the LLM inference router."""
-
-from typing import Optional, Dict, Any
-
-
-class RouterError(Exception):
-    """Base exception for router errors."""
+class LLMRouterException(Exception):
+    """Base exception for LLM router."""
     pass
 
-
-class ModelUnavailableError(RouterError):
+class ModelUnavailableException(LLMRouterException):
     """Raised when a model is unavailable."""
-    
-    def __init__(self, message: str, model_name: str, reason: Optional[str] = None):
-        super().__init__(message)
-        self.model_name = model_name
-        self.reason = reason
+    pass
 
-
-class CircuitBreakerOpenError(RouterError):
-    """Raised when circuit breaker is open."""
-    
-    def __init__(self, message: str, model_name: str, failure_count: int):
-        super().__init__(message)
-        self.model_name = model_name
-        self.failure_count = failure_count
-
-
-class TimeoutError(RouterError):
-    """Raised when a request times out."""
-    
-    def __init__(self, message: str, model_name: str, timeout: float, context: Dict[str, Any]):
-        super().__init__(message)
-        self.model_name = model_name
-        self.timeout = timeout
-        self.context = context
-
-
-class ComplexityAnalysisError(RouterError):
+class ComplexityAnalysisException(LLMRouterException):
     """Raised when complexity analysis fails."""
     pass
 
-
-class LoadBalancerError(RouterError):
-    """Raised when load balancing fails."""
+class CircuitBreakerOpenException(LLMRouterException):
+    """Raised when circuit breaker is open."""
     pass
 
+class RetryExhaustedException(LLMRouterException):
+    """Raised when retry attempts are exhausted."""
+    def __init__(self, message: str, original_exception: Exception = None):
+        super().__init__(message)
+        self.original_exception = original_exception
 
-class CacheError(RouterError):
+class TimeoutException(LLMRouterException):
+    """Raised when operation times out."""
+    pass
+
+class CacheException(LLMRouterException):
     """Raised when cache operations fail."""
+    pass
+
+class LoadBalancerException(LLMRouterException):
+    """Raised when load balancer fails to select instance."""
     pass
