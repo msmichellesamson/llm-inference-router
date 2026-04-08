@@ -1,33 +1,39 @@
 class LLMRouterException(Exception):
-    """Base exception for LLM router."""
+    """Base exception for LLM Router"""
     pass
 
-class ModelUnavailableException(LLMRouterException):
-    """Raised when a model is unavailable."""
+class ModelUnavailable(LLMRouterException):
+    """Raised when a model is unavailable"""
     pass
 
-class ComplexityAnalysisException(LLMRouterException):
-    """Raised when complexity analysis fails."""
+class ComplexityAnalysisError(LLMRouterException):
+    """Raised when complexity analysis fails"""
     pass
 
-class CircuitBreakerOpenException(LLMRouterException):
-    """Raised when circuit breaker is open."""
+class CircuitBreakerOpen(LLMRouterException):
+    """Raised when circuit breaker is open"""
     pass
 
-class RetryExhaustedException(LLMRouterException):
-    """Raised when retry attempts are exhausted."""
-    def __init__(self, message: str, original_exception: Exception = None):
-        super().__init__(message)
-        self.original_exception = original_exception
-
-class TimeoutException(LLMRouterException):
-    """Raised when operation times out."""
+class TimeoutError(LLMRouterException):
+    """Raised when request times out"""
     pass
 
-class CacheException(LLMRouterException):
-    """Raised when cache operations fail."""
+class RetryExhausted(LLMRouterException):
+    """Raised when all retries are exhausted"""
     pass
 
-class LoadBalancerException(LLMRouterException):
-    """Raised when load balancer fails to select instance."""
+class RateLimitExceeded(LLMRouterException):
+    """Raised when rate limit is exceeded"""
+    pass
+
+class ValidationError(LLMRouterException):
+    """Raised when input validation fails"""
+    pass
+
+class DatabaseError(LLMRouterException):
+    """Raised when database operations fail"""
+    pass
+
+class ModelDriftDetected(LLMRouterException):
+    """Raised when model drift is detected"""
     pass
