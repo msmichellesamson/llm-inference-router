@@ -2,219 +2,121 @@
 
 Multi-model LLM router that optimizes cost and latency by intelligently routing queries to local/cloud models based on complexity analysis.
 
-## Overview
-
-This system automatically routes LLM queries to the most appropriate model (local or cloud) based on:
-- Query complexity analysis
-- Cost optimization
-- Latency requirements
-- Model availability and health
-- Load balancing
-
-## Features
-
-### Core Routing
-- **Intelligent Query Analysis**: Complexity scoring for optimal model selection
-- **Multi-Model Support**: Local models (Ollama) + Cloud APIs (OpenAI, Anthropic)
-- **Cost Optimization**: Automatic cost-aware routing decisions
-- **Load Balancing**: Distribute load across available models
-- **Health Monitoring**: Automatic failover detection and recovery
-
-### Reliability & Performance
-- **Circuit Breaker**: Automatic failure detection and recovery
-- **Retry Logic**: Exponential backoff with jitter
-- **Timeout Handling**: Configurable per-model timeouts
-- **Error Tracking**: Comprehensive error metrics and alerting
-- **Model Warmup**: Pre-warming for reduced cold start latency
-
-### Observability
-- **Metrics**: Prometheus metrics for latency, cost, and success rates
-- **Tracing**: Distributed tracing with OpenTelemetry
-- **Health Checks**: Kubernetes-ready health endpoints
-- **Alerting**: Critical failure notifications
-
-### Data & Caching
-- **Redis Integration**: Response caching and session management
-- **Drift Detection**: Model performance degradation alerts
-- **Batch Processing**: Efficient bulk query handling
-- **Rate Limiting**: Per-client and global rate limiting
+## Skills Demonstrated
+- **AI/ML**: LLM routing, complexity analysis, model selection
+- **Infrastructure**: Kubernetes, Terraform, GCP deployment
+- **SRE**: Circuit breakers, health checks, observability, chaos engineering
+- **Backend**: FastAPI microservice, gRPC, distributed routing
+- **Database**: Redis caching, query optimization
+- **DevOps**: CI/CD, containerization, GitOps
+- **Data**: Request preprocessing, metrics pipeline
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   API Gateway   │ -> │  Complexity      │ -> │  Model Router   │
-│  (FastAPI)      │    │  Analyzer        │    │  (Load Balance) │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                                               │
-         v                                               v
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Health Checks  │    │  Circuit Breaker │    │  Local Models   │
-│  & Monitoring   │    │  & Retry Logic   │    │  (Ollama)       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                       │
-         v                       v                       v
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Redis Cache    │    │  Error Tracking  │    │  Cloud APIs     │
-│  & Sessions     │    │  & Alerting      │    │  (OpenAI/etc)   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+Client → API Gateway → Router → [Local Model | Cloud API]
+                    ↓
+               Redis Cache ← Metrics
 ```
+
+## Features
+
+### Core Routing
+- **Intelligent Routing**: Routes based on query complexity and model availability
+- **Load Balancing**: Distributes load across available models
+- **Circuit Breaker**: Prevents cascade failures
+- **Health Monitoring**: Continuous model health checks
+
+### Performance
+- **Redis Caching**: Sub-millisecond response caching
+- **Batch Processing**: Efficient batch inference
+- **Connection Pooling**: Optimized HTTP/gRPC connections
+- **Timeout Handling**: Graceful timeout with fallbacks
+
+### Reliability
+- **Retry Logic**: Exponential backoff with jitter
+- **Error Tracking**: Comprehensive error classification
+- **Drift Detection**: Model performance monitoring
+- **Graceful Degradation**: Fallback to simpler models
+
+### Observability
+- **Prometheus Metrics**: Request latency, error rates, model usage
+- **OpenTelemetry Tracing**: Distributed request tracing
+- **Health Endpoints**: Kubernetes-ready health checks
+- **Performance Benchmarking**: Automated load testing
+
+## Infrastructure
+
+### Kubernetes
+- **High Availability**: Pod disruption budgets, HPA scaling
+- **Security**: Network policies, resource limits
+- **Monitoring**: ServiceMonitor for Prometheus scraping
+- **Persistence**: Redis with persistent volumes
+
+### Terraform
+- **GCP Resources**: GKE cluster, Redis instance, monitoring
+- **Alerting**: Prometheus alertmanager rules
+- **Networking**: VPC, firewalls, load balancers
 
 ## Quick Start
 
-### Docker Compose (Development)
 ```bash
-# Start all services
-docker-compose up -d
+# Deploy infrastructure
+cd terraform && terraform apply
 
-# Check health
-curl http://localhost:8000/health
-
-# Send query
-curl -X POST http://localhost:8000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Explain machine learning", "max_tokens": 100}'
-```
-
-### Kubernetes (Production)
-```bash
-# Apply configurations
+# Deploy application
 kubectl apply -f k8s/
 
-# Check deployment
-kubectl get pods -l app=llm-router
-
 # Port forward for testing
-kubectl port-forward service/llm-router 8000:80
+kubectl port-forward svc/llm-inference-router 8000:80
 ```
 
-### Terraform (Infrastructure)
+## API Usage
+
 ```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
-```
+# Simple inference
+curl -X POST http://localhost:8000/v1/inference \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is machine learning?", "max_tokens": 100}'
 
-## Configuration
-
-### Environment Variables
-```bash
-# API Configuration
-PORT=8000
-WORKERS=4
-LOG_LEVEL=INFO
-
-# Model Providers
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-OLLAMA_URL=http://ollama:11434
-
-# Redis Configuration
-REDIS_URL=redis://redis:6379/0
-CACHE_TTL=3600
-
-# Monitoring
-PROMETHEUS_PORT=9090
-TRACING_ENABLED=true
-JAEGER_ENDPOINT=http://jaeger:14268/api/traces
-
-# Health Monitoring
-HEALTH_CHECK_INTERVAL=30
-MAX_CONSECUTIVE_FAILURES=3
-```
-
-## API Endpoints
-
-### Completions
-```bash
-POST /v1/completions
-{
-  "prompt": "Your query here",
-  "max_tokens": 150,
-  "temperature": 0.7,
-  "model_preference": "auto"  // "local", "cloud", "auto"
-}
-```
-
-### Health & Metrics
-```bash
-GET /health          # Service health
-GET /health/models   # Model health status
-GET /metrics         # Prometheus metrics
-GET /admin/stats     # Detailed statistics
-```
-
-### Batch Processing
-```bash
-POST /v1/batch
-{
-  "requests": [
-    {"prompt": "Query 1", "max_tokens": 100},
-    {"prompt": "Query 2", "max_tokens": 100}
-  ]
-}
+# Batch inference
+curl -X POST http://localhost:8000/v1/batch \
+  -H "Content-Type: application/json" \
+  -d '{"requests": [{"prompt": "Hello"}, {"prompt": "World"}]}'
 ```
 
 ## Monitoring
 
-### Key Metrics
-- `llm_request_duration_seconds`: Request latency by model
-- `llm_request_cost_usd`: Cost per request
-- `llm_model_health_status`: Model availability (0/1)
-- `llm_circuit_breaker_state`: Circuit breaker status
-- `llm_cache_hit_ratio`: Cache effectiveness
+- **Metrics**: `/metrics` endpoint for Prometheus
+- **Health**: `/health` and `/ready` endpoints
+- **Traces**: OpenTelemetry to configured backend
 
-### Alerts
-- High error rate (>5% over 5 minutes)
-- Model unavailability (health check failures)
-- High latency (>30s p95)
-- Circuit breaker trips
-- Cost anomalies
+## Configuration
+
+Environment variables:
+- `REDIS_URL`: Redis connection string
+- `MODEL_ENDPOINTS`: JSON array of model configurations
+- `ENABLE_TRACING`: Enable OpenTelemetry tracing
+- `LOG_LEVEL`: Logging verbosity
 
 ## Development
 
-### Running Tests
 ```bash
-# Unit tests
+# Install dependencies
+pip install -r requirements.txt
+
+# Run tests
 pytest tests/ -v
 
-# Integration tests
-pytest tests/test_api_integration.py -v
-
-# Load testing
-locust -f tests/load_test.py --host=http://localhost:8000
+# Run locally
+python -m src.main
 ```
 
-### Code Quality
-```bash
-# Type checking
-mypy src/
+## Production Deployment
 
-# Linting
-ruff check src/
-ruff format src/
+1. **Infrastructure**: Deploy GCP resources with Terraform
+2. **Application**: Deploy to GKE with Kubernetes manifests
+3. **Monitoring**: Configure Prometheus and Grafana
+4. **Alerting**: Set up PagerDuty/Slack notifications
 
-# Security scan
-bandit -r src/
-```
-
-## Performance
-
-- **Latency**: <100ms routing overhead
-- **Throughput**: 1000+ requests/second
-- **Cache Hit Rate**: 60-80% for repeated queries
-- **Availability**: 99.9% uptime with proper failover
-
-## Tech Stack
-
-**Backend**: Python 3.11, FastAPI, Pydantic, asyncio  
-**Database**: Redis (caching), PostgreSQL (metrics)  
-**Infrastructure**: Docker, Kubernetes, Terraform  
-**Monitoring**: Prometheus, Grafana, Jaeger, AlertManager  
-**Cloud**: GCP (Cloud Run, GKE), AWS compatible  
-**CI/CD**: GitHub Actions, automated testing & deployment
-
----
-
-*Production-ready LLM routing with enterprise-grade reliability and observability.*
+Built with Python, FastAPI, Redis, Kubernetes, and Terraform.
