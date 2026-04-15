@@ -1,0 +1,25 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llm-inference-router-pdb
+  namespace: default
+  labels:
+    app: llm-inference-router
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: llm-inference-router
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: default
+  labels:
+    app: redis
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis
