@@ -2,121 +2,102 @@
 
 Multi-model LLM router that optimizes cost and latency by intelligently routing queries to local/cloud models based on complexity analysis.
 
-## Skills Demonstrated
-- **AI/ML**: LLM routing, complexity analysis, model selection
-- **Infrastructure**: Kubernetes, Terraform, GCP deployment
-- **SRE**: Circuit breakers, health checks, observability, chaos engineering
-- **Backend**: FastAPI microservice, gRPC, distributed routing
-- **Database**: Redis caching, query optimization
-- **DevOps**: CI/CD, containerization, GitOps
-- **Data**: Request preprocessing, metrics pipeline
-
 ## Architecture
 
-```
-Client → API Gateway → Router → [Local Model | Cloud API]
-                    ↓
-               Redis Cache ← Metrics
-```
-
-## Features
-
-### Core Routing
-- **Intelligent Routing**: Routes based on query complexity and model availability
-- **Load Balancing**: Distributes load across available models
-- **Circuit Breaker**: Prevents cascade failures
-- **Health Monitoring**: Continuous model health checks
-
-### Performance
-- **Redis Caching**: Sub-millisecond response caching
-- **Batch Processing**: Efficient batch inference
-- **Connection Pooling**: Optimized HTTP/gRPC connections
-- **Timeout Handling**: Graceful timeout with fallbacks
-
-### Reliability
-- **Retry Logic**: Exponential backoff with jitter
-- **Error Tracking**: Comprehensive error classification
-- **Drift Detection**: Model performance monitoring
-- **Graceful Degradation**: Fallback to simpler models
-
-### Observability
-- **Prometheus Metrics**: Request latency, error rates, model usage
-- **OpenTelemetry Tracing**: Distributed request tracing
-- **Health Endpoints**: Kubernetes-ready health checks
-- **Performance Benchmarking**: Automated load testing
+- **Smart Routing**: Complexity analysis determines optimal model selection
+- **Multi-Provider**: Supports local models (Ollama) and cloud APIs (OpenAI, Anthropic)
+- **Cost Optimization**: Real-time cost estimation and budget controls
+- **High Availability**: Circuit breakers, retries, fallbacks, and health checks
+- **Observability**: Prometheus metrics, distributed tracing, structured logging
+- **Caching**: Redis-backed response caching with TTL management
+- **Rate Limiting**: Per-client rate limiting and quota management
 
 ## Infrastructure
 
-### Kubernetes
-- **High Availability**: Pod disruption budgets, HPA scaling
-- **Security**: Network policies, resource limits
-- **Monitoring**: ServiceMonitor for Prometheus scraping
-- **Persistence**: Redis with persistent volumes
-
-### Terraform
-- **GCP Resources**: GKE cluster, Redis instance, monitoring
-- **Alerting**: Prometheus alertmanager rules
-- **Networking**: VPC, firewalls, load balancers
-
-## Quick Start
-
+### Deployment
 ```bash
-# Deploy infrastructure
-cd terraform && terraform apply
-
-# Deploy application
+# Deploy to Kubernetes
 kubectl apply -f k8s/
 
-# Port forward for testing
-kubectl port-forward svc/llm-inference-router 8000:80
+# Or use Docker Compose for local development
+docker-compose up
 ```
 
-## API Usage
-
+### Terraform (GCP)
 ```bash
-# Simple inference
-curl -X POST http://localhost:8000/v1/inference \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "What is machine learning?", "max_tokens": 100}'
-
-# Batch inference
-curl -X POST http://localhost:8000/v1/batch \
-  -H "Content-Type: application/json" \
-  -d '{"requests": [{"prompt": "Hello"}, {"prompt": "World"}]}'
+cd terraform/
+terraform init
+terraform apply
 ```
 
-## Monitoring
+### Components
+- **API Gateway**: FastAPI with async request handling
+- **Router Engine**: ML-based complexity analysis for model selection
+- **Cache Layer**: Redis with intelligent TTL and eviction
+- **Monitoring**: Prometheus + Grafana dashboards
+- **Load Balancing**: Multiple model endpoint management
+- **Security**: RBAC, network policies, rate limiting
 
-- **Metrics**: `/metrics` endpoint for Prometheus
-- **Health**: `/health` and `/ready` endpoints
-- **Traces**: OpenTelemetry to configured backend
+## Features
+
+### Routing Intelligence
+- Query complexity scoring (tokens, semantics, domain)
+- Cost-aware routing with budget tracking
+- Latency optimization based on SLA requirements
+- Fallback chains for reliability
+
+### Reliability
+- Circuit breakers with configurable thresholds
+- Exponential backoff retry logic
+- Health checks for all model endpoints
+- Performance degradation detection
+
+### Observability
+- Request/response metrics and latencies
+- Model performance tracking
+- Cost analytics and budget alerts
+- Distributed tracing with correlation IDs
+- Error tracking and categorization
+
+### Caching Strategy
+- Semantic similarity caching
+- Cost-based cache prioritization
+- Adaptive TTL based on query patterns
+- Cache warming for popular queries
+
+## API Endpoints
+
+- `POST /chat/completions` - Main inference endpoint
+- `POST /batch` - Batch processing with queueing
+- `GET /models` - Available model information
+- `GET /health` - Service health status
+- `GET /metrics` - Prometheus metrics
+- `POST /benchmark` - Model performance testing
 
 ## Configuration
 
 Environment variables:
-- `REDIS_URL`: Redis connection string
-- `MODEL_ENDPOINTS`: JSON array of model configurations
-- `ENABLE_TRACING`: Enable OpenTelemetry tracing
-- `LOG_LEVEL`: Logging verbosity
+- `REDIS_URL` - Redis connection string
+- `MODEL_CONFIGS` - JSON config for model endpoints
+- `COST_LIMITS` - Per-client cost budgets
+- `LOG_LEVEL` - Logging verbosity
 
-## Development
+## Monitoring
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+Key metrics:
+- `llm_requests_total` - Request count by model/client
+- `llm_request_duration_seconds` - Response latencies
+- `llm_cost_total` - Running cost by model/client
+- `llm_cache_hit_ratio` - Cache effectiveness
+- `llm_circuit_breaker_state` - Circuit breaker status
 
-# Run tests
-pytest tests/ -v
+## Stack
 
-# Run locally
-python -m src.main
-```
+- **Languages**: Python 3.11+
+- **Framework**: FastAPI with async/await
+- **Cache**: Redis 7.x
+- **Monitoring**: Prometheus, Grafana
+- **Infrastructure**: Kubernetes, Terraform (GCP)
+- **CI/CD**: GitHub Actions with automated deployments
 
-## Production Deployment
-
-1. **Infrastructure**: Deploy GCP resources with Terraform
-2. **Application**: Deploy to GKE with Kubernetes manifests
-3. **Monitoring**: Configure Prometheus and Grafana
-4. **Alerting**: Set up PagerDuty/Slack notifications
-
-Built with Python, FastAPI, Redis, Kubernetes, and Terraform.
+Built for production scale with focus on cost efficiency, reliability, and observability.
