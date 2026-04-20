@@ -1,0 +1,18 @@
+{
+  "n_prompts": 80,
+  "auc_by_method": {
+    "random": 0.495625,
+    "heuristic (token + regex)": 0.41718749999999993,
+    "learned (MiniLM + logreg, LOO-CV)": 0.9375000000000001
+  },
+  "complex_categories": [
+    "coding",
+    "math",
+    "reasoning",
+    "stem"
+  ],
+  "method_notes": {
+    "heuristic": "from src/core/complexity_analyzer.py - token count + regex",
+    "learned": "all-MiniLM-L6-v2 embeddings + logistic regression, leave-one-out CV"
+  }
+}
