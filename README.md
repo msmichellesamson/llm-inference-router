@@ -6,8 +6,9 @@
 
 LMSYS's [RouteLLM](https://arxiv.org/abs/2406.18665) showed that a learned
 router can send ~50% of queries to a cheaper/smaller model with negligible
-quality loss on MT-Bench. FrugalGPT made a similar argument earlier. The
-shared insight: **most queries don't need your strongest model.**
+quality loss on MT-Bench. [FrugalGPT](https://arxiv.org/abs/2305.05176)
+made a similar argument earlier. The shared insight: **most queries don't
+need your strongest model.**
 
 But a learned router is its own deployment problem — you have to train it,
 keep it fresh as model behaviour changes, and monitor it for drift. I wanted
@@ -80,8 +81,8 @@ the routing decisions are any good doesn't exist yet.
 
 ## References
 
-- Ong et al., *RouteLLM: Learning to Route LLMs with Preference Data* (2024)
-- Chen et al., *FrugalGPT: How to Use Large Language Models While Reducing
-  Cost and Improving Performance* (2023)
-- Šakota et al., *Fly-Swat or Cannon? Cost-Effective Language Model Choice
-  via Meta-Modeling* (2024)
+- Ong et al., [*RouteLLM: Learning to Route LLMs with Preference Data*](https://arxiv.org/abs/2406.18665) (2024)
+- Chen et al., [*FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance*](https://arxiv.org/abs/2305.05176) (2023)
+- Šakota et al., [*Fly-Swat or Cannon? Cost-Effective Language Model Choice via Meta-Modeling*](https://arxiv.org/abs/2308.06077) (2024)
+- [MT-Bench](https://huggingface.co/spaces/lmsys/mt-bench) — the eval suite RouteLLM trained against
+- [Martian's model router](https://withmartian.com/) — commercial implementation in the same space
