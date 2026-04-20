@@ -1,0 +1,31 @@
+{
+  "n_prompts": 80,
+  "complex_categories": [
+    "coding",
+    "math",
+    "reasoning",
+    "stem"
+  ],
+  "simple_categories": [
+    "extraction",
+    "humanities",
+    "roleplay",
+    "writing"
+  ],
+  "auc_by_method": {
+    "heuristic (token + regex)": 0.41718749999999993,
+    "token count only": 0.32218749999999996,
+    "char count only": 0.3209375,
+    "random": 0.495625
+  },
+  "heuristic_mean_by_category": {
+    "coding": 0.06,
+    "extraction": 0.25,
+    "humanities": 0.15,
+    "math": 0.06,
+    "reasoning": 0.11000000000000001,
+    "roleplay": 0.12,
+    "stem": 0.09,
+    "writing": 0.03
+  }
+}
